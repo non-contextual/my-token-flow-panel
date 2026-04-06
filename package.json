@@ -1,0 +1,12 @@
+{
+  "name": "sol-token-flow",
+  "private": true,
+  "workspaces": ["fetcher", "frontend"],
+  "scripts": {
+    "fetch": "npm run fetch -w fetcher --",
+    "serve": "npm run serve -w fetcher",
+    "dev:frontend": "npm run dev -w frontend",
+    "build": "npm run build -w frontend",
+    "install:all": "npm install"
+  }
+}
