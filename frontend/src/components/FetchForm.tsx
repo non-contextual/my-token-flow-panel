@@ -4,6 +4,8 @@ import HistoryPanel from './HistoryPanel'
 import { saveToLocalHistory } from '../utils/localHistory'
 
 interface Props {
+  initialMint?: string
+  initialDays?: number
   onFetching: () => void
   onDone: (data: FlowData) => void
 }
@@ -33,9 +35,9 @@ const DAYS_OPTIONS = [
 
 let logIdSeq = 0
 
-export default function FetchForm({ onFetching, onDone }: Props) {
-  const [mint, setMint] = useState('')
-  const [days, setDays] = useState(7)
+export default function FetchForm({ initialMint = '', initialDays = 7, onFetching, onDone }: Props) {
+  const [mint, setMint] = useState(initialMint)
+  const [days, setDays] = useState(initialDays)
   const [limit, setLimit] = useState(3000)
   const [showAdvanced, setShowAdvanced] = useState(false)
 

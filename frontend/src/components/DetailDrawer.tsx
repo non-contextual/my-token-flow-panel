@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import type { TokenFlow, AddressNode } from '../types'
 
 export type DrawerTarget =
@@ -35,6 +35,26 @@ function shortAddr(addr: string): string {
   return `${addr.slice(0, 6)}…${addr.slice(-4)}`
 }
 
+// 钱包行为特征标签：基于流量对称性、净流向比例、tx 数量
+function walletTypeTag(node: AddressNode): { label: string; color: string } {
+  const total = node.totalSent + node.totalReceived
+  if (total === 0) return { label: 'No activity', color: 'text-muted' }
+
+  const lo = Math.min(node.totalSent, node.totalReceived)
+  const hi = Math.max(node.totalSent, node.totalReceived, 1)
+  const symmetry = lo / hi
+
+  if (symmetry > 0.4) return { label: 'Pool-like · bidirectional', color: 'text-[#6366f1]' }
+
+  const netRatio = Math.abs(node.netFlow) / total
+  if (node.txCount >= 30 && netRatio < 0.15) return { label: 'High-freq · balanced', color: 'text-slate-300' }
+  if (total > 5e7) return { label: 'Whale · large volume', color: 'text-[#2dd4bf]' }
+  if (node.txCount <= 2) return { label: 'Rare · few transactions', color: 'text-muted' }
+  if (node.netFlow > 0 && netRatio > 0.5) return { label: 'Accumulator · net inflow', color: 'text-[#2dd4bf]' }
+  if (node.netFlow < 0 && netRatio > 0.5) return { label: 'Distributor · net outflow', color: 'text-[#f97316]' }
+  return { label: 'Mixed · balanced activity', color: 'text-slate-400' }
+}
+
 function CopyBtn({ text }: { text: string }) {
   const [ok, setOk] = useState(false)
   return (
@@ -60,7 +80,7 @@ function StatRow({ label, value, color }: { label: string; value: string; color?
 }
 
 function FlowRow({ flow, perspective }: { flow: TokenFlow; perspective?: string }) {
-  const isOut = perspective ? flow.fromAddress === perspective : false
+  const isOut    = perspective ? flow.fromAddress === perspective : false
   const dirColor = isOut ? 'text-[#f97316]' : 'text-[#2dd4bf]'
   const arrow    = isOut ? '→' : '←'
 
@@ -71,11 +91,21 @@ function FlowRow({ flow, perspective }: { flow: TokenFlow; perspective?: string 
       <span className={`text-xs font-mono font-semibold text-right ${dirColor}`}>
         {arrow} {fmtAmount(flow.amount)}
       </span>
-      {/* row 2: from → to + source */}
+      {/* row 2: from → to */}
       <span className="text-[11px] font-mono text-slate-400 truncate">
         {shortAddr(flow.fromAddress)} → {shortAddr(flow.toAddress)}
       </span>
-      <span className="text-[10px] text-muted text-right font-mono">{flow.source}</span>
+      {/* row 3: source + solscan link */}
+      <span className="text-[10px] text-muted text-right font-mono col-start-2">{flow.source}</span>
+      <a
+        href={`https://solscan.io/tx/${flow.signature}`}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="text-[10px] font-mono text-muted/50 hover:text-accent transition-colors truncate"
+        title={flow.signature}
+      >
+        {flow.signature.slice(0, 8)}…
+      </a>
     </div>
   )
 }
@@ -84,6 +114,14 @@ function FlowRow({ flow, perspective }: { flow: TokenFlow; perspective?: string 
 
 export default function DetailDrawer({ target, flows, topAddresses, onClose }: Props) {
   const open = target !== null
+
+  // Esc 键关闭抽屉
+  useEffect(() => {
+    if (!open) return
+    const handler = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
+  }, [open, onClose])
 
   return (
     <>
@@ -120,8 +158,8 @@ function NodePanel({ target, flows, topAddresses, onClose }: {
   onClose: () => void
 }) {
   const node = topAddresses.find(a => a.address === target.address)
+  const tag  = node ? walletTypeTag(node) : null
 
-  // 所有涉及该地址的 flow，按时间倒序
   const related = flows
     .filter(f => f.fromAddress === target.address || f.toAddress === target.address)
     .sort((a, b) => b.timestamp - a.timestamp)
@@ -141,6 +179,12 @@ function NodePanel({ target, flows, topAddresses, onClose }: {
           <p className="text-[10px] font-mono text-muted mt-0.5 break-all leading-tight">
             {target.address}
           </p>
+          {/* 钱包类型标签 */}
+          {tag && (
+            <p className={`text-[10px] font-mono mt-1.5 ${tag.color}`}>
+              ◈ {tag.label}
+            </p>
+          )}
         </div>
         <button onClick={onClose} className="text-muted hover:text-slate-200 ml-3 shrink-0 text-lg leading-none">✕</button>
       </div>
@@ -193,7 +237,6 @@ function EdgePanel({ target, flows, onClose }: {
   const { fromFull, toFull, fromLabel, toLabel } = target
   const isOthers = fromFull === 'Others' || toFull === 'Others'
 
-  // 两个方向都要，按时间倒序
   const related = flows
     .filter(f =>
       (f.fromAddress === fromFull && f.toAddress === toFull) ||
@@ -201,7 +244,6 @@ function EdgePanel({ target, flows, onClose }: {
     )
     .sort((a, b) => b.timestamp - a.timestamp)
 
-  // 净流向计算
   const fwdVol = related.filter(f => f.fromAddress === fromFull).reduce((s, f) => s + f.amount, 0)
   const revVol = related.filter(f => f.fromAddress === toFull).reduce((s, f) => s + f.amount, 0)
   const net    = fwdVol - revVol

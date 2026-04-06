@@ -4,6 +4,7 @@
  * 使用 Graph 而非 Sankey，因为代币流转天然有环（池子既买又卖），
  * Sankey 不支持环，遇到环会静默渲染为空白。
  */
+import { useState } from 'react'
 import ReactECharts from 'echarts-for-react'
 import type { FlowEdge, AddressNode } from '../types'
 
@@ -39,6 +40,9 @@ function fmtAmount(n: number): string {
 }
 
 export default function FlowSankey({ edges, topAddresses, onNodeClick, onEdgeClick }: Props) {
+  // 用 key 强制重新挂载 ECharts，实现布局重置
+  const [layoutKey, setLayoutKey] = useState(0)
+
   if (edges.length === 0) {
     return (
       <div className="h-64 flex items-center justify-center text-muted text-sm font-mono">
@@ -159,15 +163,24 @@ export default function FlowSankey({ edges, topAddresses, onNodeClick, onEdgeCli
 
   return (
     <div>
-      {/* 图例 */}
-      <div className="flex gap-4 mb-4 text-xs font-mono text-muted">
-        <span><span className="inline-block w-2 h-2 rounded-full bg-[#6366f1] mr-1" />Pool-like (双向)</span>
+      {/* 图例 + 重置按钮 */}
+      <div className="flex gap-4 mb-4 text-xs font-mono text-muted items-center">
+        <span><span className="inline-block w-2 h-2 rounded-full bg-[#6366f1] mr-1" />Pool-like</span>
         <span><span className="inline-block w-2 h-2 rounded-full bg-[#2dd4bf] mr-1" />Net receiver</span>
         <span><span className="inline-block w-2 h-2 rounded-full bg-[#f97316] mr-1" />Net sender</span>
         <span><span className="inline-block w-2 h-2 rounded-full bg-[#475569] mr-1" />Others</span>
-        <span className="ml-auto text-[10px] opacity-60">Drag to rearrange · Scroll to zoom</span>
+        <span className="ml-auto text-[10px] opacity-60">Drag · Scroll to zoom</span>
+        <button
+          onClick={() => setLayoutKey(k => k + 1)}
+          className="px-2 py-0.5 rounded border border-border text-[10px] text-muted
+                     hover:border-accent hover:text-accent transition-colors shrink-0"
+          title="Re-randomize force layout"
+        >
+          ↺ reset layout
+        </button>
       </div>
       <ReactECharts
+        key={layoutKey}
         option={option}
         style={{ height: '520px', width: '100%' }}
         opts={{ renderer: 'canvas' }}
