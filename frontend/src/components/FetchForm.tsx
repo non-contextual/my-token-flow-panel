@@ -4,8 +4,9 @@ import HistoryPanel from './HistoryPanel'
 import { saveToLocalHistory } from '../utils/localHistory'
 
 interface Props {
-  initialMint?: string
-  initialDays?: number
+  initialMint?:  string
+  initialSince?: number   // Unix 秒
+  initialUntil?: number   // Unix 秒
   onFetching: () => void
   onDone: (data: FlowData) => void
 }
@@ -25,35 +26,58 @@ interface ProgressState {
   progressTotal: number
 }
 
-const DAYS_OPTIONS = [
-  { label: '1d', value: 1 },
-  { label: '3d', value: 3 },
-  { label: '7d', value: 7 },
-  { label: '14d', value: 14 },
-  { label: '30d', value: 30 },
+// datetime-local 格式 "YYYY-MM-DDTHH:MM"（本地时间）
+function toDatetimeLocal(d: Date): string {
+  const p = (n: number) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`
+}
+
+function fromDatetimeLocal(s: string): number {
+  return Math.floor(new Date(s).getTime() / 1000)
+}
+
+const PRESETS = [
+  { label: '1h',  seconds: 3600 },
+  { label: '6h',  seconds: 6 * 3600 },
+  { label: '1d',  seconds: 86400 },
+  { label: '3d',  seconds: 3 * 86400 },
+  { label: '7d',  seconds: 7 * 86400 },
+  { label: '14d', seconds: 14 * 86400 },
+  { label: '30d', seconds: 30 * 86400 },
 ]
 
 let logIdSeq = 0
 
-export default function FetchForm({ initialMint = '', initialDays = 7, onFetching, onDone }: Props) {
-  const [mint, setMint] = useState(initialMint)
-  const [days, setDays] = useState(initialDays)
-  const [limit, setLimit] = useState(3000)
+export default function FetchForm({ initialMint = '', initialSince, initialUntil, onFetching, onDone }: Props) {
+  const now = new Date()
+  const defaultUntil = initialUntil ? new Date(initialUntil * 1000) : now
+  const defaultSince = initialSince ? new Date(initialSince * 1000) : new Date(now.getTime() - 7 * 86400 * 1000)
+
+  const [mint, setMint]     = useState(initialMint)
+  const [since, setSince]   = useState(toDatetimeLocal(defaultSince))
+  const [until, setUntil]   = useState(toDatetimeLocal(defaultUntil))
+  const [limit, setLimit]   = useState(3000)
   const [showAdvanced, setShowAdvanced] = useState(false)
 
   const [isFetching, setIsFetching] = useState(false)
-  const [logs, setLogs] = useState<LogEntry[]>([])
+  const [logs, setLogs]     = useState<LogEntry[]>([])
   const [progress, setProgress] = useState<ProgressState | null>(null)
   const [hasError, setHasError] = useState(false)
   const [historyRefresh, setHistoryRefresh] = useState(0)
 
   const logsEndRef = useRef<HTMLDivElement>(null)
-  const esRef = useRef<EventSource | null>(null)
+  const esRef      = useRef<EventSource | null>(null)
 
-  // 自动滚动到最新日志
   useEffect(() => {
     logsEndRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [logs])
+
+  function applyPreset(seconds: number) {
+    const end   = new Date()
+    const start = new Date(end.getTime() - seconds * 1000)
+    setUntil(toDatetimeLocal(end))
+    setSince(toDatetimeLocal(start))
+  }
 
   function addLog(message: string, level: LogEntry['level'] = 'info') {
     setLogs((prev) => [
@@ -70,7 +94,6 @@ export default function FetchForm({ initialMint = '', initialDays = 7, onFetchin
   function handleFetch() {
     if (!mint.trim() || isFetching) return
 
-    // 关闭上一次连接
     esRef.current?.close()
     setLogs([])
     setProgress(null)
@@ -80,9 +103,20 @@ export default function FetchForm({ initialMint = '', initialDays = 7, onFetchin
 
     addLog(`Starting fetch for ${mint.trim()}`, 'system')
 
+    const sinceTs = fromDatetimeLocal(since)
+    const untilTs = fromDatetimeLocal(until)
+
+    if (untilTs <= sinceTs) {
+      addLog('End time must be after start time', 'error')
+      setIsFetching(false)
+      setHasError(true)
+      return
+    }
+
     const params = new URLSearchParams({
-      mint: mint.trim(),
-      days: String(days),
+      mint:  mint.trim(),
+      since: String(sinceTs),
+      until: String(untilTs),
       limit: String(limit),
     })
 
@@ -96,21 +130,19 @@ export default function FetchForm({ initialMint = '', initialDays = 7, onFetchin
 
     es.addEventListener('step', (e) => {
       const d = JSON.parse(e.data) as { step: number; total: number; label: string }
-      setProgress((prev) => ({
+      setProgress({
         step: d.step,
         totalSteps: d.total,
         label: d.label,
         progressDone: 0,
         progressTotal: 100,
-      }))
+      })
     })
 
     es.addEventListener('progress', (e) => {
       const d = JSON.parse(e.data) as { label: string; done: number; total: number }
       setProgress((prev) =>
-        prev
-          ? { ...prev, progressDone: d.done, progressTotal: d.total }
-          : null,
+        prev ? { ...prev, progressDone: d.done, progressTotal: d.total } : null,
       )
     })
 
@@ -119,12 +151,11 @@ export default function FetchForm({ initialMint = '', initialDays = 7, onFetchin
       addLog('✓ Fetch complete! Loading visualization...', 'system')
       es.close()
       setIsFetching(false)
-      // SSE done 只含聚合数据（flows:[]）；从文件取完整数据供详情面板使用
       let fullData = d.data
       try {
         const res = await fetch('/api/data')
         if (res.ok) fullData = await res.json()
-      } catch { /* 降级用 SSE 数据 */ }
+      } catch { /* fallback */ }
       saveToLocalHistory(fullData)
       setHistoryRefresh((n) => n + 1)
       setTimeout(() => onDone(fullData), 600)
@@ -142,14 +173,11 @@ export default function FetchForm({ initialMint = '', initialDays = 7, onFetchin
       setHasError(true)
     })
 
-    // SSE 连接本身出错（网络问题、服务器未启动等）
     es.onerror = () => {
-      if (es.readyState === EventSource.CLOSED) {
-        if (isFetching) {
-          addLog('Connection closed unexpectedly. Is the backend server running?', 'error')
-          setIsFetching(false)
-          setHasError(true)
-        }
+      if (es.readyState === EventSource.CLOSED && isFetching) {
+        addLog('Connection closed unexpectedly. Is the backend server running?', 'error')
+        setIsFetching(false)
+        setHasError(true)
       }
     }
   }
@@ -160,11 +188,11 @@ export default function FetchForm({ initialMint = '', initialDays = 7, onFetchin
     addLog('Cancelled by user', 'warn')
   }
 
-  const isValid = mint.trim().length >= 32
+  const isValid   = mint.trim().length >= 32
+  const rangeOk   = fromDatetimeLocal(until) > fromDatetimeLocal(since)
 
   return (
     <div className="min-h-screen bg-surface flex flex-col">
-      {/* Header */}
       <header className="border-b border-border px-6 py-4">
         <span className="font-mono font-semibold text-accent tracking-wider uppercase text-sm">
           Sol Token Flow
@@ -173,17 +201,13 @@ export default function FetchForm({ initialMint = '', initialDays = 7, onFetchin
 
       <div className="flex-1 flex items-start justify-center pt-16 px-4">
         <div className="w-full max-w-2xl space-y-6">
-          {/* Title */}
           <div className="text-center space-y-2">
-            <h1 className="text-2xl font-semibold text-slate-100">
-              Analyze Token Flow
-            </h1>
+            <h1 className="text-2xl font-semibold text-slate-100">Analyze Token Flow</h1>
             <p className="text-muted text-sm font-mono">
               Crawl and visualize buy/sell activity for any Solana meme token
             </p>
           </div>
 
-          {/* Form card */}
           <div className="card space-y-5">
             {/* Mint address */}
             <div className="space-y-2">
@@ -200,28 +224,67 @@ export default function FetchForm({ initialMint = '', initialDays = 7, onFetchin
               />
             </div>
 
-            {/* Days selector */}
-            <div className="space-y-2">
-              <label className="label">Time Range</label>
-              <div className="flex gap-2 flex-wrap">
-                {DAYS_OPTIONS.map((opt) => (
+            {/* Time Range */}
+            <div className="space-y-3">
+              <div className="flex items-center justify-between">
+                <label className="label">Time Range</label>
+                <span className="text-[10px] text-muted font-mono">your local timezone</span>
+              </div>
+
+              {/* Quick presets */}
+              <div className="flex gap-1.5 flex-wrap">
+                {PRESETS.map((p) => (
                   <button
-                    key={opt.value}
-                    onClick={() => setDays(opt.value)}
+                    key={p.label}
+                    onClick={() => applyPreset(p.seconds)}
                     disabled={isFetching}
-                    className={`px-4 py-2 rounded-lg font-mono text-sm border transition-colors
-                      ${days === opt.value
-                        ? 'bg-accent border-accent text-white'
-                        : 'bg-surface border-border text-muted hover:border-accent hover:text-slate-200'
-                      } disabled:opacity-40`}
+                    className="px-3 py-1.5 rounded font-mono text-xs border transition-colors
+                               bg-surface border-border text-muted
+                               hover:border-accent hover:text-slate-200 disabled:opacity-40"
                   >
-                    {opt.label}
+                    {p.label}
                   </button>
                 ))}
               </div>
+
+              {/* Datetime pickers */}
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-1">
+                  <span className="text-[10px] text-muted font-mono uppercase tracking-wider">From</span>
+                  <input
+                    type="datetime-local"
+                    value={since}
+                    onChange={(e) => setSince(e.target.value)}
+                    disabled={isFetching}
+                    className="w-full bg-surface border border-border rounded-lg px-3 py-2.5
+                               font-mono text-xs text-slate-200
+                               focus:outline-none focus:border-accent transition-colors
+                               disabled:opacity-40
+                               [color-scheme:dark]"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <span className="text-[10px] text-muted font-mono uppercase tracking-wider">To</span>
+                  <input
+                    type="datetime-local"
+                    value={until}
+                    onChange={(e) => setUntil(e.target.value)}
+                    disabled={isFetching}
+                    className="w-full bg-surface border border-border rounded-lg px-3 py-2.5
+                               font-mono text-xs text-slate-200
+                               focus:outline-none focus:border-accent transition-colors
+                               disabled:opacity-40
+                               [color-scheme:dark]"
+                  />
+                </div>
+              </div>
+
+              {!rangeOk && since && until && (
+                <p className="text-[11px] text-sell font-mono">End time must be after start time</p>
+              )}
             </div>
 
-            {/* Advanced options toggle */}
+            {/* Advanced options */}
             <button
               onClick={() => setShowAdvanced((v) => !v)}
               className="text-xs font-mono text-muted hover:text-slate-300 transition-colors flex items-center gap-1"
@@ -255,9 +318,9 @@ export default function FetchForm({ initialMint = '', initialDays = 7, onFetchin
             <div className="flex gap-3 pt-1">
               <button
                 onClick={handleFetch}
-                disabled={!isValid || isFetching}
+                disabled={!isValid || !rangeOk || isFetching}
                 className={`flex-1 py-3 rounded-lg font-mono font-semibold text-sm transition-all
-                  ${isValid && !isFetching
+                  ${isValid && rangeOk && !isFetching
                     ? 'bg-accent hover:bg-indigo-500 text-white cursor-pointer'
                     : 'bg-border text-muted cursor-not-allowed'
                   }`}
@@ -286,13 +349,9 @@ export default function FetchForm({ initialMint = '', initialDays = 7, onFetchin
           {progress && isFetching && (
             <div className="card space-y-2">
               <div className="flex justify-between text-xs font-mono text-muted">
-                <span>
-                  Step {progress.step}/{progress.totalSteps}: {progress.label}
-                </span>
+                <span>Step {progress.step}/{progress.totalSteps}: {progress.label}</span>
                 {progress.progressTotal > 0 && (
-                  <span>
-                    {progress.progressDone.toLocaleString()} / {progress.progressTotal.toLocaleString()}
-                  </span>
+                  <span>{progress.progressDone.toLocaleString()} / {progress.progressTotal.toLocaleString()}</span>
                 )}
               </div>
               <div className="h-1.5 bg-border rounded-full overflow-hidden">
@@ -325,24 +384,18 @@ export default function FetchForm({ initialMint = '', initialDays = 7, onFetchin
                 {logs.map((entry) => (
                   <div key={entry.id} className="flex gap-3 leading-5">
                     <span className="text-[#444466] shrink-0">{entry.ts}</span>
-                    <span
-                      className={
-                        entry.level === 'error' ? 'text-sell' :
-                        entry.level === 'warn'  ? 'text-gold' :
-                        entry.level === 'system'? 'text-accent' :
-                        'text-slate-400'
-                      }
-                    >
+                    <span className={
+                      entry.level === 'error' ? 'text-sell' :
+                      entry.level === 'warn'  ? 'text-gold' :
+                      entry.level === 'system'? 'text-accent' : 'text-slate-400'
+                    }>
                       {entry.level === 'system' ? '›' : entry.level === 'warn' ? '!' : entry.level === 'error' ? '✕' : ' '}
                     </span>
-                    <span
-                      className={
-                        entry.level === 'error' ? 'text-sell' :
-                        entry.level === 'warn'  ? 'text-yellow-300' :
-                        entry.level === 'system'? 'text-slate-200' :
-                        'text-slate-400'
-                      }
-                    >
+                    <span className={
+                      entry.level === 'error' ? 'text-sell' :
+                      entry.level === 'warn'  ? 'text-yellow-300' :
+                      entry.level === 'system'? 'text-slate-200' : 'text-slate-400'
+                    }>
                       {entry.message}
                     </span>
                   </div>
@@ -358,22 +411,16 @@ export default function FetchForm({ initialMint = '', initialDays = 7, onFetchin
               <p className="text-sell text-sm font-mono">Fetch failed. Check the log above.</p>
               <p className="text-muted text-xs font-mono">
                 Make sure the backend is running:
-                <code className="ml-2 bg-surface px-2 py-0.5 rounded text-accent">
-                  npm run serve
-                </code>
+                <code className="ml-2 bg-surface px-2 py-0.5 rounded text-accent">npm run serve</code>
               </p>
             </div>
           )}
 
           {/* History panel */}
           <div className="card">
-            <HistoryPanel
-              refreshTrigger={historyRefresh}
-              onLoad={(data) => onDone(data)}
-            />
+            <HistoryPanel refreshTrigger={historyRefresh} onLoad={(data) => onDone(data)} />
           </div>
 
-          {/* Footer hint */}
           <p className="text-center text-muted text-xs font-mono pb-8">
             Backend must be running on port 3001 ·{' '}
             <code className="text-accent">npm run serve</code>

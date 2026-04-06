@@ -5,10 +5,11 @@ import { extractTokenFlows, buildHourlyVolume, buildTopAddresses, buildEdges } f
 import type { FlowData } from './types'
 
 export interface PipelineOpts {
-  mint:    string
-  days:    number
-  limit?:  number
-  apiKey:  string
+  mint:   string
+  since:  number   // Unix 秒
+  until:  number   // Unix 秒
+  limit?: number
+  apiKey: string
 }
 
 export type PipelineEvent =
@@ -21,9 +22,9 @@ export type PipelineEvent =
 export type OnEvent = (event: PipelineEvent) => void
 
 export async function runPipeline(opts: PipelineOpts, emit: OnEvent): Promise<FlowData> {
-  const { mint, days, limit = 3000, apiKey } = opts
-  const rpcUrl   = `https://mainnet.helius-rpc.com/?api-key=${apiKey}`
-  const sinceTs  = Math.floor(Date.now() / 1000) - days * 86400
+  const { mint, since, until, limit = 3000, apiKey } = opts
+  const rpcUrl  = `https://mainnet.helius-rpc.com/?api-key=${apiKey}`
+  const days    = Math.round((until - since) / 86400 * 10) / 10   // 展示用
 
   const log = (msg: string, level: 'info' | 'warn' | 'error' = 'info') =>
     emit({ type: 'log', level, message: msg })
@@ -35,10 +36,12 @@ export async function runPipeline(opts: PipelineOpts, emit: OnEvent): Promise<Fl
 
   // ── Step 2: 获取签名 ──────────────────────────────────────────────────────
   emit({ type: 'step', step: 2, total: 4, label: 'Fetching signatures' })
-  log(`Querying mint address for last ${days}d (limit ${limit})...`)
+  const sinceStr = new Date(since * 1000).toISOString().slice(0, 16).replace('T', ' ')
+  const untilStr = new Date(until * 1000).toISOString().slice(0, 16).replace('T', ' ')
+  log(`Querying ${sinceStr} → ${untilStr} UTC  (limit ${limit})...`)
 
   const sigs = await fetchSignatures(
-    rpcUrl, mint, sinceTs, limit,
+    rpcUrl, mint, since, until, limit,
     (done) => emit({ type: 'progress', label: 'signatures', done, total: limit }),
   )
   log(`Found ${sigs.length} signature(s)`)
@@ -106,7 +109,9 @@ export async function runPipeline(opts: PipelineOpts, emit: OnEvent): Promise<Fl
     meta: {
       mint, mintShort, days,
       fetchedAt:        new Date().toISOString(),
-      sinceTimestamp:   sinceTs,
+      sinceTimestamp:   since,
+      since,
+      until,
       addressFetched:   mint,
       totalTxns:        txns.length,
       totalFlows:       flows.length,
@@ -131,8 +136,10 @@ export async function runPipeline(opts: PipelineOpts, emit: OnEvent): Promise<Fl
   // 写存档
   const archiveDir = path.resolve(__dirname, '../output')
   fs.mkdirSync(archiveDir, { recursive: true })
+  const sinceDate = new Date(since * 1000).toISOString().slice(0, 10)
+  const untilDate = new Date(until * 1000).toISOString().slice(0, 10)
   fs.writeFileSync(
-    path.join(archiveDir, `${mint}_${days}d_${Date.now()}.json`),
+    path.join(archiveDir, `${mint}_${sinceDate}_${untilDate}_${Date.now()}.json`),
     JSON.stringify(flowData, null, 2), 'utf-8',
   )
 
@@ -145,7 +152,7 @@ export async function runPipeline(opts: PipelineOpts, emit: OnEvent): Promise<Fl
 // ── 内部工具 ──────────────────────────────────────────────────────────────────
 
 async function fetchSignatures(
-  rpcUrl: string, address: string, sinceTs: number,
+  rpcUrl: string, address: string, sinceTs: number, untilTs: number,
   maxCount: number, onProgress: (done: number) => void,
 ) {
   const all: any[] = []
@@ -166,15 +173,16 @@ async function fetchSignatures(
     const result = data.result ?? []
     if (!result.length) break
 
-    let hitLimit = false
+    let hitOldLimit = false
     for (const sig of result) {
       if (sig.err) continue
-      if (sig.blockTime !== null && sig.blockTime < sinceTs) { hitLimit = true; break }
+      if (sig.blockTime !== null && sig.blockTime > untilTs) continue  // 比 until 还新，跳过
+      if (sig.blockTime !== null && sig.blockTime < sinceTs) { hitOldLimit = true; break }
       all.push(sig)
     }
 
     onProgress(Math.min(all.length, maxCount))
-    if (hitLimit || result.length < 1000) break
+    if (hitOldLimit || result.length < 1000) break
     before = result[result.length - 1].signature
     await sleep(110)
   }

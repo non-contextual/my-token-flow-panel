@@ -121,7 +121,9 @@ app.get('/api/data', (_req, res) => {
 app.get('/api/fetch', async (req, res) => {
   const {
     mint,
-    days = '7',
+    since: sinceParam,
+    until: untilParam,
+    days  = '7',
     limit = '3000',
   } = req.query as Record<string, string>
 
@@ -129,6 +131,12 @@ app.get('/api/fetch', async (req, res) => {
     res.status(400).json({ error: 'Invalid mint address' })
     return
   }
+
+  // since/until 优先；否则用 days 往前推
+  const nowTs   = Math.floor(Date.now() / 1000)
+  const untilTs = untilParam ? parseInt(untilParam) : nowTs
+  const sinceTs = sinceParam ? parseInt(sinceParam)
+                             : untilTs - Math.min(Math.max(parseInt(days) || 7, 1), 365) * 86400
 
   // 设置 SSE headers
   res.setHeader('Content-Type', 'text/event-stream')
@@ -152,7 +160,8 @@ app.get('/api/fetch', async (req, res) => {
     await runPipeline(
       {
         mint,
-        days: Math.min(Math.max(parseInt(days) || 7, 1), 90),
+        since: sinceTs,
+        until: untilTs,
         limit: Math.min(parseInt(limit) || 3000, 10000),
         apiKey: API_KEY!,
       },

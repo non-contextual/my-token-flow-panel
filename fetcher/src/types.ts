@@ -114,6 +114,8 @@ export interface FlowData {
     addressFetched:    string
     totalTxns:         number
     totalFlows:        number   // token transfer 事件数
+    since:             number   // Unix 秒（查询起始）
+    until:             number   // Unix 秒（查询截止）
     // 聚合统计（供 StatsCards 使用，避免前端 reduce 原始 flows）
     totalVolume:       number
     uniqueAddresses:   number

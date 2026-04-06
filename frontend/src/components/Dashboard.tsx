@@ -11,9 +11,20 @@ interface Props {
   onBack?: () => void
 }
 
+function fmtTs(ts: number): string {
+  return new Date(ts * 1000).toLocaleString('en-US', {
+    month: 'short', day: 'numeric', year: 'numeric',
+    hour: '2-digit', minute: '2-digit', hour12: false,
+  })
+}
+
 export default function Dashboard({ data, onBack }: Props) {
   const { meta } = data
   const fetchedAt = new Date(meta.fetchedAt).toLocaleString()
+  // 显示范围：优先用 since/until，无则回退到 days（兼容旧数据）
+  const rangeLabel = (meta.since && meta.until)
+    ? `${fmtTs(meta.since)} → ${fmtTs(meta.until)}`
+    : `last ${meta.days}d`
   const [drawer, setDrawer] = useState<DrawerTarget | null>(null)
 
   function handleNodeClick(label: string, address: string) {
@@ -46,7 +57,7 @@ export default function Dashboard({ data, onBack }: Props) {
             </span>
           </div>
           <div className="flex items-center gap-6 text-xs font-mono text-muted">
-            <span>last <span className="text-slate-300">{meta.days}d</span></span>
+            <span className="text-slate-300">{rangeLabel}</span>
             <span>updated <span className="text-slate-300">{fetchedAt}</span></span>
           </div>
         </div>

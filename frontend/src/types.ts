@@ -44,6 +44,8 @@ export interface FlowData {
     addressFetched:   string
     totalTxns:        number
     totalFlows:       number
+    since:            number   // Unix 秒
+    until:            number   // Unix 秒
     // 聚合统计（后端预计算，前端直接用）
     totalVolume:      number
     uniqueAddresses:  number
