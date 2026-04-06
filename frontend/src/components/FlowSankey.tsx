@@ -10,6 +10,8 @@ import type { FlowEdge, AddressNode } from '../types'
 interface Props {
   edges:        FlowEdge[]
   topAddresses: AddressNode[]
+  onNodeClick?: (label: string, address: string) => void
+  onEdgeClick?: (fromLabel: string, toLabel: string, fromFull: string, toFull: string) => void
 }
 
 // 配色方案：与整体 indigo 暗色主题统一，避免荧光色
@@ -36,7 +38,7 @@ function fmtAmount(n: number): string {
   return n.toFixed(2)
 }
 
-export default function FlowSankey({ edges, topAddresses }: Props) {
+export default function FlowSankey({ edges, topAddresses, onNodeClick, onEdgeClick }: Props) {
   if (edges.length === 0) {
     return (
       <div className="h-64 flex items-center justify-center text-muted text-sm font-mono">
@@ -169,6 +171,20 @@ export default function FlowSankey({ edges, topAddresses }: Props) {
         option={option}
         style={{ height: '520px', width: '100%' }}
         opts={{ renderer: 'canvas' }}
+        onEvents={{
+          click: (params: any) => {
+            if (params.dataType === 'node') {
+              const label = params.name as string
+              if (label === 'Others') return
+              const node = topAddresses.find(a => a.label === label)
+              if (node) onNodeClick?.(label, node.address)
+            } else if (params.dataType === 'edge') {
+              const { source, target, fromFull, toFull } = params.data
+              if (fromFull === 'Others' || toFull === 'Others') return
+              onEdgeClick?.(source, target, fromFull, toFull)
+            }
+          },
+        }}
       />
     </div>
   )

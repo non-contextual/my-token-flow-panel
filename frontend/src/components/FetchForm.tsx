@@ -112,16 +112,20 @@ export default function FetchForm({ onFetching, onDone }: Props) {
       )
     })
 
-    es.addEventListener('done', (e) => {
+    es.addEventListener('done', async (e) => {
       const d = JSON.parse(e.data) as { type: 'done'; data: FlowData }
-      const { edges, topAddresses, hourlyVolume } = d.data
-      addLog(`edges: ${edges?.length ?? 0}  topAddr: ${topAddresses?.length ?? 0}  hourly: ${hourlyVolume?.length ?? 0}`, 'info')
       addLog('✓ Fetch complete! Loading visualization...', 'system')
       es.close()
       setIsFetching(false)
-      saveToLocalHistory(d.data)
+      // SSE done 只含聚合数据（flows:[]）；从文件取完整数据供详情面板使用
+      let fullData = d.data
+      try {
+        const res = await fetch('/api/data')
+        if (res.ok) fullData = await res.json()
+      } catch { /* 降级用 SSE 数据 */ }
+      saveToLocalHistory(fullData)
       setHistoryRefresh((n) => n + 1)
-      setTimeout(() => onDone(d.data), 600)
+      setTimeout(() => onDone(fullData), 600)
     })
 
     es.addEventListener('error', (e) => {
